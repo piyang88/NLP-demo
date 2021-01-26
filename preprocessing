@@ -1,28 +1,64 @@
-import tensorflow as tf
-
-import matplotlib.pyplot as plt
-import matplotlib.ticker as ticker
-from sklearn.model_selection import train_test_split
-
+import os
+import zipfile
+import requests
 import unicodedata
 import re
 import numpy as np
-import os
 import io
 import time
 import jieba
+import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
+from sklearn.model_selection import train_test_split
+from fake_useragent import UserAgent
+import tensorflow as tf
 
-path_to_zip = tf.keras.utils.get_file(
-    'spa-eng.zip', origin='http://storage.googleapis.com/download.tensorflow.org/data/spa-eng.zip',
-    extract=True)
+#数据源
+url="http://www.manythings.org/anki/cmn-eng.zip"
+base_dir=os.path.join(os.path.expanduser('~'),".keras/datasets/")
+data_dir=os.path.join(base_dir,"zh_eng")
 
-path_to_file=os.path.dirname(path_to_zip)+"/zh-eng/cmn.txt"
-path_to_dict="/root/userdict.txt"
+#数据文件
+data_file="cmn.txt"
+#自定义分词文件
+dict_file="userdict.txt"
+#数据文件全路径
+path_to_file=os.path.join(base_dir,data_dir,data_file)
+#自定义分词文件全路径
+path_to_dict=os.path.join(base_dir,data_dir,dict_file)
+
+#下载数据源文件，解压缩到指定目录
+def download_corpus(replaced=True):
+	zipf=os.path.join(base_dir,url.split('/')[-1])
+	if os.path.exists(zipf):
+		if replaced:
+			os.remove(zipf)
+		else:	
+			raise("File exists!")
+	print("download from... ",url)
+	#模拟浏览器，否则requests抓取不到数据
+	ua=UserAgent()
+	a=ua.chrome #ua.chrome,ua.safari,etc
+	headers={"User-Agent":a}
+	response = requests.get(url,headers=headers,stream=True)
+	with open(zipf, 'ab+') as f:
+		#大文件分段下载存储
+		for chunk in response.iter_content(chunk_size=1024):
+			if chunk:
+				f.write(chunk)
+	print("Download done!")
+	f= zipfile.ZipFile(zipf,'r')
+	f.extractall(os.path.join(base_dir,data_dir))
+	print("Data file location:",path_to_file)
+	f.close()
+download_corpus()
+#加载用户词典
 jieba.load_userdict(path_to_dict)
 def unicode_to_ascii(s):
   return ''.join(c for c in unicodedata.normalize('NFD', s)
       if unicodedata.category(c) != 'Mn')
       
+#预处理英文句子      
 def preprocess_sentence(w):
   w = unicode_to_ascii(w.lower().strip())
   # creating a space between a word and the punctuation following it
@@ -37,11 +73,12 @@ def preprocess_sentence(w):
   # so that the model know when to start and stop predicting.
   w = '<start> ' + w + ' <end>'
   return w
-
+  
+#预处理中文句子 
 def preprocess_sentence_zh(w):
   w = '<start>' + w + '<end>'
   return w
-
+#创建英文，中文数据集
 def create_dataset(path, num_examples):
 	lines = io.open(path, encoding='UTF-8').read().strip().split('\n')
 	word_tuple = [[w for w in l.split('\t')]  for l in lines[:num_examples]]
@@ -52,21 +89,15 @@ def create_dataset(path, num_examples):
 
 en,zh=create_dataset(path_to_file,None)
 
+#创建英文数据集单词分词
 def tokenize(lang):
   lang_tokenizer = tf.keras.preprocessing.text.Tokenizer(filters='')
   lang_tokenizer.fit_on_texts(lang)
   tensor = lang_tokenizer.texts_to_sequences(lang)
   tensor = tf.keras.preprocessing.sequence.pad_sequences(tensor,padding='post')
   return tensor, lang_tokenizer
-def tokenize_zh(lang):
-	zh_sentences=[" ".join(ll) for ll in[[w for w in list(jieba.cut(l))] for l in lang]]
-  lang_tokenizer = tf.keras.preprocessing.text.Tokenizer(
-      filters=' ')
-  lang_tokenizer.fit_on_texts(lang)
-  tensor = lang_tokenizer.texts_to_sequences(lang)
-  tensor = tf.keras.preprocessing.sequence.pad_sequences(tensor,
-                                                         padding='post')
-  return tensor, lang_tokenizer
+  
+#创建中文数据集词组分词
 def tokenize_zh(lang):
 	zh_sentences=[" ".join(ll) for ll in[[w for w in list(jieba.cut(l))] for l in lang]]
 	lang_tokenizer = tf.keras.preprocessing.text.Tokenizer(filters=' ')
@@ -74,35 +105,23 @@ def tokenize_zh(lang):
 	tensor = lang_tokenizer.texts_to_sequences(zh_sentences)
 	tensor = tf.keras.preprocessing.sequence.pad_sequences(tensor,padding='post')
 	return tensor, lang_tokenizer
-	
+
+#加载数据集，返回中英文数据集语句向量及对应分词器	
 def load_dataset(path, num_examples=None):
   # creating cleaned input, output pairs
-  targ_lang, inp_lang = create_dataset(path, num_examples)
+  inp_lang,targ_lang= create_dataset(path, num_examples)
   input_tensor, inp_lang_tokenizer = tokenize(inp_lang)
   target_tensor, targ_lang_tokenizer = tokenize_zh(targ_lang)
   return input_tensor, target_tensor, inp_lang_tokenizer, targ_lang_tokenizer
-  
-#input_tensor, inp_lang_tokenizer = tokenize(en)
+
+input_tensor, target_tensor, inp_lang_tokenizer, targ_lang_tokenizer=load_dataset(path_to_file)  
+
+#显示中文，英文分词编码信息
 def convert(lang, tensor):
   for t in tensor:
     if t!=0:
       print ("%d ----> %s" % (t, lang.index_word[t]))
 convert(inp_lang_tokenizer, input_tensor[0])
-
-#zh_words=["".join(w) for w in jieba.cut(l) for l in zh]
-'''def get_zh_words():
-	zh_words = list(set([w for l in zh for w in list(jieba.cut(l))]))
-	zh_words.sort()
-	return zh_words
-zh_words=get_zh_words()
-zh_vocab_size = len(zh_words)
-print(zh_vocab_size)'''
-
-def tokenize_zh(lang):
-	zh_sentences=[" ".join(ll) for ll in[[w for w in list(jieba.cut(l))] for l in lang]]
-	lang_tokenizer = tf.keras.preprocessing.text.Tokenizer(filters=' ')
-	lang_tokenizer.fit_on_texts(zh_sentences)
-	tensor = lang_tokenizer.texts_to_sequences(zh_sentences)
-	tensor = tf.keras.preprocessing.sequence.pad_sequences(tensor,padding='post')
-	return tensor, lang_tokenizer
-
+convert(inp_lang_tokenizer, input_tensor[-1])
+convert(targ_lang_tokenizer, target_tensor[0])
+convert(targ_lang_tokenizer, target_tensor[-1])
